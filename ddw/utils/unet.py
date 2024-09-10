@@ -5,13 +5,16 @@ import torch
 import tqdm
 import yaml
 from torch import nn
+from scipy import spatial
 
-from .fourier import apply_fourier_mask_to_tomo
+
+from .fourier import apply_fourier_mask_to_tomo, apply_fourier_mask_to_tomo_complex
 from .masked_loss import masked_loss
 from .missing_wedge import get_missing_wedge_mask
 from .mrctools import save_mrc_data
 from .normalization import get_avg_model_input_mean_and_std_from_dataloader
 
+BASE_SEED = 666
 
 class LitUnet3D(pl.LightningModule):
     """
@@ -32,44 +35,142 @@ class LitUnet3D(pl.LightningModule):
         self.update_subtomo_missing_wedges_every_n_epochs = (
             update_subtomo_missing_wedges_every_n_epochs
         )
-        self.unet = Unet3D(**self.unet_params)
+        self.automatic_optimization = False
+        self.generator = UNetModel()
+        self.discriminator = UNetModelEncoder()
         # self.ema = ExponentialMovingAverage(self.unet.parameters(), decay=0.995)
         self.save_hyperparameters()
 
     def forward(self, x):
-        return self.unet(x.unsqueeze(1)).squeeze(
+        return self.generator(x.unsqueeze(1)).squeeze(
             1
-        )  # unsqueeze to add channel dimension, squeeze to remove it
+        )
+    @staticmethod
+    def adversarial_loss(y_pred, y_target):
+        return nn.BCEWithLogitsLoss()(y_pred, y_target)
+    
+    def training_step(self, batch):
+        batch_size = batch["model_input"].shape[0]
 
-    def training_step(self, batch, batch_idx):
-        model_output = self(batch["model_input"])
-        loss = masked_loss(
-            model_output=model_output,
+        optimizer_G, optimizer_D = self.optimizers()
+        
+        # make ground truth labels
+        real_label = torch.ones((batch_size, 1), dtype=torch.float, device=self.device, requires_grad=False)
+        fake_label = torch.zeros((batch_size, 1), dtype=torch.float, device=self.device, requires_grad=False)
+        
+        ###################
+        # train Generator #
+        ###################
+        self.toggle_optimizer(optimizer_G)
+        
+        gen_imgs = self(batch["model_input"])
+        voxel_loss = masked_loss(
+            model_output=gen_imgs,
             target=batch["model_target"],
             rot_mw_mask=batch["rot_mw_mask"],
             mw_mask=batch["mw_mask"],
         )
-        self.log(
-            "fitting_loss",
-            loss,
+        # apply mask to generator output
+        random_rot_mw_mask = batch["random_rot_mw_mask"]
+        # update missing wedges    
+        rand_mw_gen_imgs_ft = apply_fourier_mask_to_tomo_complex(gen_imgs, random_rot_mw_mask)
+        # adversarial loss        
+        genadv_loss = self.adversarial_loss(self.discriminator(rand_mw_gen_imgs_ft), real_label)
+        loss_G = voxel_loss + 1 * genadv_loss 
+        
+        optimizer_G.zero_grad()
+        self.manual_backward(loss_G)
+        optimizer_G.step()
+        self.untoggle_optimizer(optimizer_G)
+    
+        #######################
+        # train Discriminator #
+        #######################
+        self.toggle_optimizer(optimizer_D)
+        
+        model_target_ft = apply_fourier_mask_to_tomo_complex(batch["model_target"], batch["rot_mw_mask"])
+        real_loss = self.adversarial_loss(self.discriminator(model_target_ft), real_label)
+        fake_loss = self.adversarial_loss(self.discriminator(rand_mw_gen_imgs_ft.detach()), fake_label)    
+        loss_D = (real_loss + fake_loss) / 2
+        
+        optimizer_D.zero_grad()
+        self.manual_backward(loss_D)
+        optimizer_D.step()
+        self.untoggle_optimizer(optimizer_D)
+        
+        self.log_dict(
+            {
+            'loss_G': loss_G,
+            'loss_D': loss_D,
+            'loss_voxelL1': voxel_loss,
+            'loss_genadvBCE': genadv_loss,
+            'loss_realD': real_loss,
+            'loss_fakeD': fake_loss,
+            },
+            prog_bar=False,
             on_step=False,
             on_epoch=True,
-            prog_bar=True,
-            logger=True,
+            sync_dist=True,
         )
-        return loss
-
-    def validation_step(self, batch, batch_idx):
-        model_output = self(batch["model_input"])
-        loss = masked_loss(
-            model_output=model_output,
+    
+    # validation step
+    def validation_step(self, batch):
+        batch_size = batch["model_input"].shape[0]
+        
+        gen_imgs = self(batch["model_input"])
+        
+        # make ground truth labels
+        real_label = torch.ones((batch_size, 1), dtype=torch.float, device=self.device, requires_grad=False)
+        fake_label = torch.zeros((batch_size, 1), dtype=torch.float, device=self.device, requires_grad=False)
+        
+        voxel_loss = masked_loss(
+            model_output=gen_imgs,
             target=batch["model_target"],
             rot_mw_mask=batch["rot_mw_mask"],
             mw_mask=batch["mw_mask"],
         )
-        self.log(
-            "val_loss", loss, on_step=False, on_epoch=True, prog_bar=True, logger=True
-        )
+        # apply mask to generator output
+        random_rot_mw_mask = batch["random_rot_mw_mask"]
+        # update missing wedges
+        rand_mw_gen_imgs_ft = apply_fourier_mask_to_tomo_complex(gen_imgs, random_rot_mw_mask)
+
+        genadv_loss = self.adversarial_loss(self.discriminator(rand_mw_gen_imgs_ft), real_label)
+        loss_G = voxel_loss + 1 * genadv_loss 
+        model_target = batch["model_target"]
+        model_target_ft = apply_fourier_mask_to_tomo_complex(model_target, batch["rot_mw_mask"])
+        real_loss = self.adversarial_loss(self.discriminator(model_target_ft), real_label)
+        fake_loss = self.adversarial_loss(self.discriminator(rand_mw_gen_imgs_ft.detach()), fake_label)    
+        loss_D = (real_loss + fake_loss) / 2
+        
+        self.log_dict(
+            {
+            # 'epoch': self.current_epoch,
+            'val_loss_G': loss_G,
+            'val_loss_D': loss_D,
+            'val_loss_voxelL1': voxel_loss,
+            'val_loss_genadvBCE': genadv_loss,
+            'val_loss_realD': real_loss,
+            'val_loss_fakeD': fake_loss,
+            'val_loss': loss_G + loss_D, # only for EarlyStopping
+            },
+            prog_bar=False,
+            on_step=False,
+            on_epoch=True,
+            sync_dist=True,
+        )   
+        
+    def configure_optimizers(self):
+        optimizer_G = torch.optim.NAdam(self.generator.parameters(), lr=4e-4)
+        optimizer_D = torch.optim.NAdam(self.discriminator.parameters(), lr=4e-4)
+        
+        scheduler_G = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer_G, mode='min', factor=0.5, 
+                                                               patience=15, eps=1e-8,)
+        scheduler_D = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer_D, mode='min', factor=0.5, 
+                                                               patience=15, eps=1e-8)
+        return [
+            {"optimizer": optimizer_G, "lr_scheduler": {"scheduler": scheduler_G, "monitor": "val_loss_G"}},
+            {"optimizer": optimizer_D, "lr_scheduler": {"scheduler": scheduler_D, "monitor": "val_loss_D"}},
+        ]
 
     # def on_before_zero_grad(self, optimizer) -> None:
     #     self.ema.update()
@@ -85,10 +186,13 @@ class LitUnet3D(pl.LightningModule):
             self.update_subtomo_missing_wedges()
             self.update_normalization()
 
-    def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), **self.adam_params)
-        # scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=100, gamma=0.1)
-        return [optimizer]  # , [scheduler]
+    def on_validation_epoch_end(self):
+        # Step the schedulers
+        val_loss_G = self.trainer.logged_metrics['val_loss_G']
+        val_loss_D = self.trainer.logged_metrics['val_loss_D']
+        for lr_scheduler in self.lr_schedulers():
+            lr_scheduler.step(val_loss_G)
+            lr_scheduler.step(val_loss_D)
 
     # def lr_scheduler_step(self, scheduler, optimizer_idx, metric) -> None:
     #     if scheduler is not None:
@@ -100,13 +204,13 @@ class LitUnet3D(pl.LightningModule):
         """
         # we don't want to rotate the subtomos when updating them, so we create new dataloader objects with rotate_subtomos=False
         datasets = []
-        train_loader = self.trainer.train_dataloader.loaders
+        train_loader = self.trainer.train_dataloader
         train_set = train_loader.dataset
         train_set.rotate_subtomos = False
         datasets.append(train_set)
         # val_dataloaders may be None
         if self.trainer.val_dataloaders is not None:
-            val_loader = self.trainer.val_dataloaders[0]
+            val_loader = self.trainer.val_dataloaders
             val_set = val_loader.dataset
             val_set.rotate_subtomos = False
             datasets.append(val_set)
@@ -159,8 +263,10 @@ class LitUnet3D(pl.LightningModule):
         )
 
         # update normalization in unet
-        self.unet.normalization_loc = loc
-        self.unet.normalization_scale = scale
+        self.generator.normalization_loc = loc
+        self.generator.normalization_scale = scale
+        self.discriminator.normalization_loc = loc
+        self.discriminator.normalization_scale = scale
         # update normalization in hparams
         self.unet_params["normalization_loc"] = loc
         self.unet_params["normalization_scale"] = scale
@@ -181,7 +287,7 @@ class LitUnet3D(pl.LightningModule):
             yaml.dump(hparams, f)
 
 
-class Unet3D(torch.nn.Module):
+class UNetModel(torch.nn.Module):
     """
     PyTorch implementation of a 3D U-Net, which was inspired by the one used in the IsoNet software package (https://github.com/IsoNet-cryoET/IsoNet/tree/master/models/unet)
     """
@@ -376,4 +482,102 @@ class SpatialUpSampling(nn.Module):
         output = self.tconv(volume)
         output = torch.cat([output, cat], dim=1)
         output = self.activation(output)
+        return output
+
+class UNetModelEncoder(torch.nn.Module):
+    """
+    PyTorch implementation of a 3D U-Net, which was inspired by the one used in the IsoNet software package (
+    class UNetModel(torch.nn.Module):
+    """
+    
+    def __init__(
+        self,
+        in_chans: int = 2,
+        out_chans: int = 1,
+        chans: int = 32,
+        num_downsample_layers: int = 3,
+        drop_prob: float = 0.0,
+        residual: bool = True,
+        normalization_loc: float = 0.0,
+        normalization_scale: float = 1.0,
+    ):
+        super().__init__()
+
+        self.in_chans = in_chans
+        self.out_chans = out_chans
+        self.chans = chans
+        self.num_downsample_layers = num_downsample_layers
+        self.drop_prob = drop_prob
+        self.residual = residual
+        self.normalization_loc = normalization_loc
+        self.normalization_scale = normalization_scale
+        self.__init_layers__()
+
+    @property
+    def normalization_loc(self):
+        return self._normalization_loc
+
+    @normalization_loc.setter
+    def normalization_loc(self, normalization_loc):
+        self._normalization_loc = nn.parameter.Parameter(
+            torch.tensor(normalization_loc), requires_grad=False
+        )
+
+    @property
+    def normalization_scale(self):
+        return self._normalization_scale
+
+    @normalization_scale.setter
+    def normalization_scale(self, normalization_scale):
+        self._normalization_scale = nn.parameter.Parameter(
+            torch.tensor(normalization_scale), requires_grad=False
+        )
+
+    def __init_layers__(self):
+        self.down_blocks = nn.ModuleList(
+            [DownConvBlock(self.in_chans, self.chans, self.drop_prob)]
+        )
+        self.down_samplers = nn.ModuleList([SpatialDownSampling(self.chans)])
+
+        ch = self.chans
+        for _ in range(self.num_downsample_layers - 1):
+            self.down_blocks.append(DownConvBlock(ch, ch * 2, self.drop_prob))
+            self.down_samplers.append(SpatialDownSampling(ch * 2))
+            ch *= 2
+
+        self.bottleneck = nn.Sequential(
+            nn.Conv3d(ch, ch * 2, kernel_size=(3, 3, 3), padding=1),
+            nn.LeakyReLU(negative_slope=0.05, inplace=True),
+            nn.Conv3d(ch * 2, ch, kernel_size=(3, 3, 3), padding=1),
+        )
+        self.pool = nn.AdaptiveAvgPool3d((1, 1, 1))
+        self.flatten = nn.Flatten()
+        self.fc1 = nn.Linear(ch, 64)
+        self.fc2 = nn.Linear(64, 32)
+        self.fc3 = nn.Linear(32, 1)
+
+    def normalize(self, volume: torch.Tensor) -> torch.Tensor:
+        return (volume - self.normalization_loc) / (self.normalization_scale + 1e-6)
+
+    def denormalize(self, volume: torch.Tensor) -> torch.Tensor:
+        return volume * (self.normalization_scale + 1e-6) + self.normalization_loc
+
+    def forward(self, volume: torch.Tensor) -> torch.Tensor:
+        volume = self.normalize(volume)
+
+        stack = []
+        output = volume
+
+        # apply down-sampling layers
+        for block, downsampler in zip(self.down_blocks, self.down_samplers):
+            output = block(output)
+            stack.append(output)  # save intermediate outputs for skip connections
+            output = downsampler(output)
+
+        output = self.bottleneck(output)
+        output = self.pool(output)
+        output = self.flatten(output)
+        output = self.fc1(output)
+        output = self.fc2(output)
+        output = self.fc3(output)
         return output

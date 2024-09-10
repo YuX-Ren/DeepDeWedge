@@ -9,9 +9,14 @@ from .missing_wedge import (get_missing_wedge_mask,
                             get_rotated_missing_wedge_mask)
 from .mrctools import load_mrc_data
 from .rotation import rotate_vol_around_axis
-
+import numpy as np
 BASE_SEED = 888
 
+rotation_list = [(((0,1),1),((1,2),0)), (((0,1),1),((1,2),1)), (((0,2),1),((1,2),0)), (((0,2),1),((1,2),1)),
+                (((0,1),1),((1,2),2)), (((0,1),1),((1,2),3)), (((0,2),1),((1,2),2)), (((0,2),1),((1,2),3)),
+                (((0,1),3),((1,2),0)), (((0,1),3),((1,2),1)), (((0,2),3),((1,2),0)), (((0,2),1),((1,2),1)),
+                (((0,1),3),((1,2),2)), (((0,1),3),((1,2),3)), (((0,2),3),((1,2),2)), (((0,2),1),((1,2),3)),
+                (((1,2),1),((0,2),0)), (((1,2),1),((0,2),2)), (((1,2),3),((0,2),0)), (((1,2),3),((0,2),2))]
 
 class SubtomoDataset(Dataset):
     """
@@ -48,6 +53,34 @@ class SubtomoDataset(Dataset):
         rotvec = torch.from_numpy(
             spatial.transform.Rotation.random(random_state=seed).as_rotvec()
         )
+        rot_axis = rotvec / rotvec.norm()
+        rot_angle = torch.rad2deg(rotvec.norm())
+        return rot_axis, rot_angle
+    
+    def _sample_rot_axis_and_angle_90(self, index):
+
+        perm = torch.randint(len(rotation_list), (1,)).item()
+        print(f"perm: {perm}")
+        rota = rotation_list[perm]
+        seed = BASE_SEED + index if self.deterministic_rotations else None
+
+        rot_matrix = np.eye(3)
+        
+        # Apply the first rotation in the zyx order
+        first_axis = rota[0][0]
+        first_angle = rota[0][1] * 90  # Convert from 90-degree steps to degrees
+        first_rotation = spatial.transform.Rotation.from_euler('zyx'[first_axis[0]], first_angle, degrees=True).as_matrix()
+        rot_matrix = first_rotation @ rot_matrix
+        
+        # Apply the second rotation in the zyx order
+        second_axis = rota[1][0]
+        second_angle = rota[1][1] * 90  # Convert from 90-degree steps to degrees
+        second_rotation = spatial.transform.Rotation.from_euler('zyx'[second_axis[0]], second_angle, degrees=True).as_matrix()
+        rot_matrix = second_rotation @ rot_matrix
+        
+        # Convert the resulting rotation matrix to a rotation vector
+        rotation = spatial.transform.Rotation.from_matrix(rot_matrix)
+        rotvec = rotation.as_rotvec()
         rot_axis = rotvec / rotvec.norm()
         rot_angle = torch.rad2deg(rotvec.norm())
         return rot_axis, rot_angle
@@ -89,6 +122,15 @@ class SubtomoDataset(Dataset):
                 rot_angle=rot_angle,
                 device=subtomo0.device,
             )
+            random_rot = self._sample_rot_axis_and_angle(index*2)
+            rot_axis, rot_angle = random_rot
+            random_rot_mw_mask = get_rotated_missing_wedge_mask(
+                grid_size=3 * [self.crop_subtomos_to_size],
+                mw_angle=self.mw_angle,
+                rot_axis=rot_axis,
+                rot_angle=rot_angle,
+                device=subtomo0.device,
+            )
         else:
             mw_mask = get_missing_wedge_mask(
                 grid_size=subtomo0.shape,
@@ -97,6 +139,7 @@ class SubtomoDataset(Dataset):
             )
             rot_mw_mask = mw_mask
             rot_angle, rot_axis = 0, torch.tensor([1.0, 0.0, 0.0])
+            random_rot_mw_mask = mw_mask
 
         model_input = apply_fourier_mask_to_tomo(subtomo0, mw_mask)
         item = {
@@ -108,6 +151,7 @@ class SubtomoDataset(Dataset):
             "subtomo1_file": subtomo1_file,
             "rot_angle": rot_angle,
             "rot_axis": rot_axis,
+            "random_rot_mw_mask": random_rot_mw_mask,
         }
         return item
 

@@ -251,11 +251,11 @@ def fit_model(
         logger=logger,
         callbacks=callbacks,
         detect_anomaly=True,
-        resume_from_checkpoint=resume_from_checkpoint,
+        # resume_from_checkpoint=resume_from_checkpoint,
     )
     # fit the model
-    if val_data_exists and trainer.resume_from_checkpoint is None:
-        trainer.validate(lit_unet, val_dataloader)
+    # if val_data_exists and trainer.resume_from_checkpoint is None:
+    #     trainer.validate(lit_unet, val_dataloader)
     trainer.fit(
         model=lit_unet,
         train_dataloaders=fitting_dataloader,

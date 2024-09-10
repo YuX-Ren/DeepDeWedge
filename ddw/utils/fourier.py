@@ -30,6 +30,16 @@ def apply_fourier_mask_to_tomo(tomo, mask, output="real"):
     elif output == "complex":
         return vol_filt
 
+def apply_fourier_mask_to_tomo_complex(tomo, mask, output="real"):
+    """
+    Multiplies the Fourier transform of 'tomo' with 'mask. This function is used to add the artificial missing wedges to the model inputs.
+    """
+    tomo_ft = fft_3d(tomo)
+    tomo_ft_masked = tomo_ft * mask
+    tomo_ft_masked = tomo_ft_masked.unsqueeze(1)
+    #Convert data from complex to channels.
+    image_out = torch.concat([torch.real(tomo_ft_masked), torch.imag(tomo_ft_masked)], axis=1)
+    return image_out
 
 def get_3d_fft_freqs_on_grid(grid_size, device="cpu"):
     """
