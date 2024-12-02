@@ -27,3 +27,11 @@ def masked_loss(model_output, target, rot_mw_mask, mw_mask, mw_weight=2.0):
     )
     loss = outside_mw_loss + mw_weight * inside_mw_loss
     return loss
+
+def total_variation_loss(data):
+    dx = data[:, 1:, :-1, :-1] - data[:, :-1, :-1, :-1]
+    dy = data[:, :-1, 1:, :-1] - data[:, :-1, :-1, :-1]
+    dz = data[:, :-1, :-1, 1:] - data[:, :-1, :-1, :-1]
+    
+    tv_loss_value = torch.mean(torch.sqrt(dx**2 + dy**2 + dz**2 + 1e-8))
+    return tv_loss_value

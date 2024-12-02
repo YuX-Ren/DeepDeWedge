@@ -252,6 +252,8 @@ def fit_model(
         callbacks=callbacks,
         detect_anomaly=True,
         resume_from_checkpoint=resume_from_checkpoint,
+        precision="bf16",
+        gradient_clip_val=1.0,
     )
     # fit the model
     if val_data_exists and trainer.resume_from_checkpoint is None:

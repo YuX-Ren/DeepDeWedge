@@ -133,6 +133,7 @@ def refine_tomogram(
         subtomo_overlap = int(math.ceil(subtomo_size / 3))
 
     device = "cpu" if gpu is None else f"cuda:{gpu}"
+    print(f"Loading model from {model_checkpoint_file}")
     lightning_model = (
         LitUnet3D.load_from_checkpoint(model_checkpoint_file).to(device).eval()
     )
@@ -208,8 +209,8 @@ def _refine_single_tomogram(
 
     tomo = load_mrc_data(tomo_file).float().to(lightning_model.device)
     # apply missing wedge mask here to be more consistent with data during model fitting
-    mw_mask = get_missing_wedge_mask(tomo.shape, mw_angle, device=tomo.device)
-    tomo = apply_fourier_mask_to_tomo(tomo, mw_mask)
+    # mw_mask = get_missing_wedge_mask(tomo.shape, mw_angle, device=tomo.device)
+    # tomo = apply_fourier_mask_to_tomo(tomo, mw_mask)
 
     tomo = (tomo / tomo.std()) * torch.tensor(normalization_scale).to(tomo.device)
     tomo = tomo - tomo.mean() + torch.tensor(normalization_loc).to(tomo.device)
@@ -231,7 +232,11 @@ def _refine_single_tomogram(
     model_outputs = []
     with torch.no_grad():
         for batch in tqdm.tqdm(subtomo_loader, desc=pbar_desc):
+            mw_mask = get_missing_wedge_mask(
+                grid_size=3 * [subtomo_size], mw_angle=mw_angle, device=tomo.device
+            )
             batch_subtomos = batch[0].to(lightning_model.device)
+            batch_subtomos = apply_fourier_mask_to_tomo(batch_subtomos, mw_mask)
             model_output = lightning_model(batch_subtomos)
             model_outputs.append(model_output.detach())
     model_outputs = list(torch.concat(model_outputs, 0))

@@ -3,7 +3,7 @@ import math
 import torch
 
 from .fourier import get_3d_fft_freqs_on_grid
-from .rotation import rotate_vol_around_axis
+from .rotation import rotate_vol_around_axis_GPU
 
 
 def get_missing_wedge_mask(grid_size, mw_angle, device="cpu"):
@@ -28,6 +28,15 @@ def get_missing_wedge_mask(grid_size, mw_angle, device="cpu"):
         grid.inner(normal_left) <= 0, grid.inner(normal_right) <= 0
     ).reshape(list(grid_size))
     mw_mask = torch.logical_and(upper_wedge, lower_wedge).int()
+    
+    # Add circular mask in x-y plane
+    grid_x = torch.linspace(-0.5*grid_size[0], 0.5*grid_size[0], grid_size[0], device=device)
+    grid_y = torch.linspace(-0.5*grid_size[1], 0.5*grid_size[1], grid_size[1], device=device)
+    grid_z = torch.linspace(-0.5*grid_size[2], 0.5*grid_size[2], grid_size[2], device=device)
+    grid_x, grid_y, grid_z = torch.meshgrid(grid_x, grid_y, grid_z, indexing='ij')
+    dim = min(grid_size[0], grid_size[1], grid_size[2])
+    sphere_mask = ((grid_x**2 + grid_y**2 + grid_z**2) <= (dim/2)**2)
+    mw_mask = mw_mask * sphere_mask.int()
     return mw_mask
 
 
@@ -42,7 +51,7 @@ def get_rotated_missing_wedge_mask(
     adjusted_grid_size = (torch.ceil(math.sqrt(2) * grid_size) / 2.0) * 2
     mw_mask = get_missing_wedge_mask(grid_size=adjusted_grid_size, mw_angle=mw_angle)
     mw_mask = (
-        rotate_vol_around_axis(
+        rotate_vol_around_axis_GPU(
             vol=mw_mask,
             rot_angle=rot_angle,
             rot_axis=rot_axis,
