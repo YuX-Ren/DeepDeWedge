@@ -254,6 +254,8 @@ def fit_model(
         resume_from_checkpoint=resume_from_checkpoint,
         precision="bf16",
         gradient_clip_val=1.0,
+        # log every step
+        log_every_n_steps=1,
     )
     # fit the model
     if val_data_exists and trainer.resume_from_checkpoint is None:

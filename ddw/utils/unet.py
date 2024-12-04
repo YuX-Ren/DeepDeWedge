@@ -65,15 +65,17 @@ class LitUnet3D(pl.LightningModule):
         else:
             self.unet = Unet3D(**self.unet_params)
         self.save_hyperparameters()
-
-    def forward(self, x):
-        return self.unet(x.unsqueeze(1)).squeeze(
+        if self.EDM:
+            self.loss_fn = EDMLoss(P_mean=-1.2, P_std=1.2, sigma_data=1.0, data_scale=1.0, data_loc=0.0)
+        self.prev_loss = None
+    def forward(self, x, t):
+        return self.unet(x.unsqueeze(1), t).squeeze(
             1
         )  # unsqueeze to add channel dimension, squeeze to remove it
 
     def training_step(self, batch, batch_idx):
         if self.EDM:
-            loss = self.loss_fn(self.unet, batch["model_input"])
+            loss, sigma = self.loss_fn(self.unet, batch["model_input"])
         else:
             model_output = self(batch["model_input"]+noise_fbp(angle = batch["mw_angle"],size = batch["model_input"].shape[-1]))
             loss = masked_loss(
@@ -85,11 +87,21 @@ class LitUnet3D(pl.LightningModule):
         self.log(
             "fitting_loss",
             loss,
-            on_step=False,
-            on_epoch=True,
+            on_step=True,
+            on_epoch=False,
             prog_bar=True,
             logger=True,
         )
+        self.log("lr", self.optimizers().param_groups[0]['lr'], on_step=True, on_epoch=False,prog_bar=True,logger=True)
+        self.log("sigma_max", sigma.max(), on_step=True, on_epoch=False,prog_bar=True,logger=True)
+        # if self.prev_loss is None:
+        #     self.prev_loss = loss
+        #     return loss
+        # loss_diff = abs(loss - self.prev_loss)
+        # if loss_diff > 3.0:
+        #     print(f"Step {self.current_epoch} | Loss jump too large: {loss_diff}. Skipping this step.")
+        #     return None
+        # self.prev_loss = loss
         return loss
 
     def validation_step(self, batch, batch_idx):
@@ -123,13 +135,15 @@ class LitUnet3D(pl.LightningModule):
             # self.update_normalization()
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), **self.adam_params)
+        optimizer = torch.optim.AdamW(self.parameters(), **self.adam_params)
         if self.EDM:
             def lr_lambda(current_step):
                 warmup_steps = 2000  # Number of warmup steps
                 if current_step < warmup_steps:
                     return float(current_step) / float(max(1, warmup_steps))
-                return 1.0
+                # decay the learning rate
+                all_steps = self.trainer.max_epochs * len(self.trainer.train_dataloader)
+                return max(0.0, 1.0 - (current_step - warmup_steps) / (all_steps - warmup_steps))
             # Use LambdaLR for the scheduler
             scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
         else:
@@ -218,8 +232,7 @@ class LitUnet3D(pl.LightningModule):
         self.update_hparam("unet_params", self.unet_params)
         self.log("normalization/loc", loc)
         self.log("normalization/scale", scale)
-        if self.EDM:
-            self.loss_fn = EDMLoss(data_scale=scale, data_loc=loc)
+
 
     def update_hparam(self, hparam, value):
         """

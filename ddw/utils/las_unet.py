@@ -9,7 +9,7 @@ class EDM_Unet3D(torch.nn.Module):
         out_chans: int = 1,
         chans: int = 64,
         num_downsample_layers: int = 3, 
-        drop_prob: float = 0.0,
+        drop_prob: float = 0.3,
         sigma_min       = 0,                
         sigma_max       = float('inf'),     
         sigma_data      = 1.0,              
@@ -19,6 +19,7 @@ class EDM_Unet3D(torch.nn.Module):
         super().__init__()
         self.in_chans = in_chans
         self.out_chans = out_chans
+        self.drop_prob = drop_prob
         self.chans = chans
         self.num_downsample_layers = num_downsample_layers
         self.sigma_min = sigma_min
@@ -55,6 +56,7 @@ class EDM_Unet3D(torch.nn.Module):
             in_channels=self.in_chans,
             out_channels=self.out_chans,
             base_channels=self.chans,
+            dropout=self.drop_prob,
         )
 
 
@@ -165,7 +167,7 @@ class UNetModel(nn.Module):
                  num_heads: int = 1,
                  world_dims: int = 3,
                  attention_resolutions=(4, 8),
-                 with_attention: bool = False,
+                 with_attention: bool = True,
                  verbose: bool = False,
                  image_condition_dim: int = VIT_FEATURE_CHANNEL,
                  text_condition_dim: int = CLIP_FEATURE_CHANNEL,

@@ -14,6 +14,7 @@ class EDMLoss:
         return x * self.data_scale + self.data_loc
     
     def __call__(self, net, images, **kwargs):
+        loss_weight = 10
         images = self.normalize(images)
         
         rnd_normal = torch.randn([images.shape[0], 1, 1, 1, 1], device=images.device)
@@ -23,7 +24,10 @@ class EDMLoss:
         n = torch.randn_like(y) * sigma
         D_yn = net(y + n, sigma)
         # smooth l1 loss
-        # loss = F.smooth_l1_loss(D_yn, y, reduction="none")
+        loss = weight * F.smooth_l1_loss(D_yn, y, reduction="none")
         # l2 loss
-        loss = weight * ((D_yn - y) ** 2)
-        return loss.mean()
+        # loss = weight * ((D_yn - y) ** 2)
+        # normalize by the value of the data
+        # data_weight = 1+(images ** 2)
+        # loss = loss / data_weight
+        return loss.mean() * loss_weight , sigma.squeeze()
