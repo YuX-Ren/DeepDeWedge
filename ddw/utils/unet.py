@@ -4,12 +4,14 @@ import pytorch_lightning as pl
 import torch
 import tqdm
 import yaml
-from .las_unet import Unet3D, EDM_Unet3D
+from .model.las_unet import Unet3D
+from .model.restormer import EDM_Unet3D
+# from .model.segformer_net import SegFormer_EDM
 from .fourier import apply_fourier_mask_to_tomo
 from .masked_loss import masked_loss, total_variation_loss
 from .missing_wedge import get_missing_wedge_mask
 from .normalization import get_avg_model_input_mean_and_std_from_dataloader
-from .noise_generator import noise_fbp
+# from .noise_generator import noise_fbp
 from .EDM_loss import EDMLoss
 
 class ExponentialMovingAverage:
@@ -60,6 +62,7 @@ class LitUnet3D(pl.LightningModule):
         )
         self.EDM = EDM
         if self.EDM:
+            # self.unet = SegFormer_EDM(**self.unet_params)
             self.unet = EDM_Unet3D(**self.unet_params)
             self.ema = ExponentialMovingAverage(self.unet, decay=0.995)
         else:
@@ -77,13 +80,14 @@ class LitUnet3D(pl.LightningModule):
         if self.EDM:
             loss, sigma = self.loss_fn(self.unet, batch["model_input"])
         else:
-            model_output = self(batch["model_input"]+noise_fbp(angle = batch["mw_angle"],size = batch["model_input"].shape[-1]))
-            loss = masked_loss(
-                model_output=model_output,
-                target=batch["model_target"],
-                rot_mw_mask=batch["rot_mw_mask"],
-                mw_mask=batch["mw_mask"],
-            )
+            pass
+            # model_output = self(batch["model_input"]+noise_fbp(angle = batch["mw_angle"],size = batch["model_input"].shape[-1]))
+            # loss = masked_loss(
+            #     model_output=model_output,
+            #     target=batch["model_target"],
+            #     rot_mw_mask=batch["rot_mw_mask"],
+            #     mw_mask=batch["mw_mask"],
+            # )
         self.log(
             "fitting_loss",
             loss,
@@ -156,7 +160,7 @@ class LitUnet3D(pl.LightningModule):
             },
         }
     
-    def lr_scheduler_step(self, scheduler, optimizer_idx, metric) -> None:
+    def lr_scheduler_step(self, scheduler, optimizer_idx) -> None:
         if scheduler is not None:
             scheduler.step()
     # def update_subtomo_missing_wedges(self):

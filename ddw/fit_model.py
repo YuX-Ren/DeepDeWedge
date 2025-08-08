@@ -156,11 +156,11 @@ def fit_model(
             "Running model fitting without validation, as no validation data was found!"
         )
 
-    if not subtomo_size % (2 ** unet_params_dict["num_downsample_layers"]) == 0:
-        raise ValueError(
-            f"subtomo_size must be divisible by 2^unet_params_dict['num_downsample_layers'] to ensure compatibility with the U-Net architecture. "
-            f"Got subtomo_size={subtomo_size} and num_downsample_layers={unet_params_dict['num_downsample_layers']}."
-        )
+    # if not subtomo_size % (2 ** unet_params_dict["num_downsample_layers"]) == 0:
+    #     raise ValueError(
+    #         f"subtomo_size must be divisible by 2^unet_params_dict['num_downsample_layers'] to ensure compatibility with the U-Net architecture. "
+    #         f"Got subtomo_size={subtomo_size} and num_downsample_layers={unet_params_dict['num_downsample_layers']}."
+    #     )
 
     # setup datasets
     fitting_dataset = SubtomoDataset(
@@ -223,15 +223,15 @@ def fit_model(
         )
         callbacks.append(fitting_loss_callback)
     # this saves the top 3 models with the lowest validation loss
-    if save_n_models_with_lowest_val_loss > 0 and val_data_exists:
-        val_loss_callback = pl.callbacks.ModelCheckpoint(
-            dirpath=f"{logdir}/checkpoints/val_loss",
-            filename="{epoch}-{val_loss:.5f}",
-            monitor="val_loss",
-            verbose=True,
-            save_top_k=save_n_models_with_lowest_val_loss,
-        )
-        callbacks.append(val_loss_callback)
+    # if save_n_models_with_lowest_val_loss > 0 and val_data_exists:
+    #     val_loss_callback = pl.callbacks.ModelCheckpoint(
+    #         dirpath=f"{logdir}/checkpoints/val_loss",
+    #         filename="{epoch}-{val_loss:.5f}",
+    #         monitor="val_loss",
+    #         verbose=True,
+    #         save_top_k=save_n_models_with_lowest_val_loss,
+    #     )
+    #     callbacks.append(val_loss_callback)
     # initialize the model
     lit_unet = LitUnet3D(
         unet_params=unet_params_dict,
@@ -247,19 +247,19 @@ def fit_model(
         check_val_every_n_epoch=(
             check_val_every_n_epochs if val_data_exists else num_epochs
         ),
-        deterministic=True,
+        deterministic=False,
         logger=logger,
         callbacks=callbacks,
         detect_anomaly=True,
-        resume_from_checkpoint=resume_from_checkpoint,
+        # resume_from_checkpoint=resume_from_checkpoint,
         precision="bf16",
         gradient_clip_val=1.0,
         # log every step
         log_every_n_steps=1,
     )
     # fit the model
-    if val_data_exists and trainer.resume_from_checkpoint is None:
-        trainer.validate(lit_unet, val_dataloader)
+    # if val_data_exists and trainer.resume_from_checkpoint is None:
+    #     trainer.validate(lit_unet, val_dataloader)
     trainer.fit(
         model=lit_unet,
         train_dataloaders=fitting_dataloader,

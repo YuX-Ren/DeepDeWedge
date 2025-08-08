@@ -15,7 +15,7 @@ class EDMLoss:
     
     def __call__(self, net, images, **kwargs):
         loss_weight = 10
-        images = self.normalize(images)
+        # images = self.normalize(images)
         
         rnd_normal = torch.randn([images.shape[0], 1, 1, 1, 1], device=images.device)
         sigma = (rnd_normal * self.P_std + self.P_mean).exp()

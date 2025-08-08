@@ -8,7 +8,7 @@ from .fourier import apply_fourier_mask_to_tomo
 from .missing_wedge import (get_missing_wedge_mask,
                             get_rotated_missing_wedge_mask)
 from .rotation import rotate_vol_around_axis_GPU
-from .noise_generator import noise_fbp
+# from .noise_generator import noise_fbp
 import math
 BASE_SEED = 888
 rotation_list_all = [(((0,1),1),((1,2),0)), (((0,1),1),((1,2),1)), (((0,2),1),((1,2),0)), (((0,2),1),((1,2),1)),
@@ -59,6 +59,7 @@ class SubtomoDataset(Dataset):
         return rot_axis, rot_angle
 
     def __len__(self):
+        # return 4
         return len(os.listdir(f"{self.subtomo_dir}/subtomo0"))
 
     def __getitem__(self, index):
@@ -77,8 +78,8 @@ class SubtomoDataset(Dataset):
             #     rot_axis=rot_axis,
             #     output_shape=3 * [self.crop_subtomos_to_size],
             # )
-            crop_offset = [math.floor((vs - cs) / 2) for vs, cs in zip(subtomo0.shape, 3 * [self.crop_subtomos_to_size])]
-            subtomo0 = subtomo0[crop_offset[0]:crop_offset[0]+self.crop_subtomos_to_size, crop_offset[1]:crop_offset[1]+self.crop_subtomos_to_size, crop_offset[2]:crop_offset[2]+self.crop_subtomos_to_size]
+            # crop_offset = [math.floor((vs - cs) / 2) for vs, cs in zip(subtomo0.shape, 3 * [self.crop_subtomos_to_size])]
+            # subtomo0 = subtomo0[crop_offset[0]:crop_offset[0]+self.crop_subtomos_to_size, crop_offset[1]:crop_offset[1]+self.crop_subtomos_to_size, crop_offset[2]:crop_offset[2]+self.crop_subtomos_to_size]
             # random rotation in 24 face directions
             r = rotation_list_all[torch.randint(0, len(rotation_list_all), (1,)).item()]
             subtomo0 = torch.rot90(
@@ -86,7 +87,7 @@ class SubtomoDataset(Dataset):
             )
             subtomo0 = torch.rot90(
                 subtomo0, k=r[1][1], dims=[d for d in r[1][0]]
-            )
+            ).clip(-3, 3)
             # subtomo1 = rotate_vol_around_axis_GPU(
             #     subtomo1,
             #     rot_angle=rot_angle,

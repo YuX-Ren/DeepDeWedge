@@ -1,31 +1,35 @@
 shared:
   project_dir: "./tutorial_project"
   tomo0_files: 
-    - "./tutorial_data/tomo_even_frames.rec"
+    - "./shrec/shrec1.mrc"
+    - "./shrec/shrec2.mrc"
+    - "./shrec/shrec3.mrc"
   tomo1_files: 
-    - "./tutorial_data/tomo_odd_frames.rec"
-  subtomo_size: 96
+    - "./shrec/shrec1.mrc"
+    - "./shrec/shrec2.mrc"
+    - "./shrec/shrec3.mrc"
+  subtomo_size: 45
   mw_angle: 50
   num_workers: 10
   gpu: 0
   seed: 42
 
 prepare_data:
-  mask_files:
-    - "./tutorial_data/mask.mrc"
+  # mask_files:
+    # - "./tutorial_data/mask.mrc"
   min_nonzero_mask_fraction_in_subtomo: 0.3
   subtomo_extraction_strides: [64, 80, 80] 
-  val_fraction: 0.2
+  val_fraction: 0.05
 
 fit_model:
     unet_params_dict:
-      chans: 64
+      chans: 48
       num_downsample_layers: 3
       drop_prob: 0.0
     adam_params_dict: 
       lr: 0.0004
-    num_epochs: 1000
-    batch_size: 5
+    num_epochs: 10000
+    batch_size: 4
     update_subtomo_missing_wedges_every_n_epochs: 10
     check_val_every_n_epochs: 10
     save_n_models_with_lowest_val_loss: 5
